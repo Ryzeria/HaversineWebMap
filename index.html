@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web Mapping: Pengukuran Jarak (Metode Haversine)</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body, html {
+            height: 100%;
+            font-family: 'Arial', sans-serif;
+            background: linear-gradient(135deg, #f3f4f8, #c7d8e3);
+        }
+
+        #map {
+            height: calc(100vh - 80px); /* Makes the map fill the viewport minus the panel height */
+            width: 100%;
+        }
+
+        .control-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            padding: 20px;
+            background: rgba(255, 255, 255, 0.9);
+            border-radius: 12px;
+            position: fixed;
+            left: 20px;
+            bottom: 20px;
+            z-index: 1000;
+            width: 320px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+            transition: transform 0.3s ease;
+        }
+
+        .control-panel.hidden {
+            transform: translateY(100%);
+        }
+
+        .toggle-panel-btn {
+            position: fixed;
+            left: 20px;
+            bottom: 120px;
+            z-index: 1001;
+            background: #4C9EED;
+            color: white;
+            border: none;
+            padding: 12px 18px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
+            transition: background 0.3s ease;
+        }
+
+        .toggle-panel-btn:hover {
+            background: #367BB5;
+        }
+
+        .info {
+            padding: 12px;
+            background: rgba(245, 245, 245, 0.85);
+            font-size: 16px;
+            box-shadow: 0px 0px 8px rgba(0, 0, 0, 0.1);
+            border-radius: 10px;
+            text-align: center;
+            color: #555;
+        }
+
+        .reset-btn {
+            background: #FF4B4B;
+            color: white;
+            border: none;
+            font-size: 14px;
+            cursor: pointer;
+            border-radius: 8px;
+            padding: 12px;
+            transition: background 0.3s ease;
+        }
+
+        .reset-btn:hover {
+            background: #FF1F1F;
+        }
+
+        .input-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        input, select, button {
+            padding: 12px;
+            font-size: 14px;
+            border-radius: 8px;
+            border: 1px solid #ccc;
+        }
+
+        input:focus, select:focus {
+            outline: none;
+            border-color: #4C9EED;
+        }
+
+        button {
+            border: none;
+            background-color: #4C9EED;
+            color: white;
+            cursor: pointer;
+            transition: background 0.3s ease;
+        }
+
+        button:hover {
+            background-color: #367BB5;
+        }
+
+        .warning {
+            color: #FF4B4B;
+            font-size: 14px;
+            padding: 5px;
+            background-color: rgba(255, 75, 75, 0.1);
+            border-radius: 5px;
+        }
+
+        @media screen and (max-width: 768px) {
+            .control-panel {
+                width: 280px;
+                bottom: 10px;
+                left: 10px;
+            }
+
+            .toggle-panel-btn {
+                bottom: 100px;
+            }
+
+            .control-panel {
+                padding: 10px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <header style="background-color: #4C9EED; color: white; text-align: center; padding: 20px 0; font-size: 24px; font-weight: bold;">
+        Web Mapping (GCD) menggunakan Metode Haversine
+    </header>
+
+    <div id="map"></div>
+    <button class="toggle-panel-btn" onclick="togglePanel()">⚙️</button>
+    <div class="control-panel hidden">
+        <div class="input-group">
+            <label for="basemap">Pilih Basemap:</label>
+            <select id="basemap" onchange="changeBasemap()">
+                <option value="OpenStreetMap">OpenStreetMap</option>
+                <option value="EsriWorldImagery">Esri World Imagery</option>
+                <option value="CartoDBDarkMatter">CartoDB Dark Matter</option>
+            </select>
+        </div>
+        <div class="input-group">
+            <label for="lat">Latitude:</label>
+            <input type="text" id="lat" placeholder="Masukkan Latitude" oninput="validateCoordinates()">
+            <label for="lng">Longitude:</label>
+            <input type="text" id="lng" placeholder="Masukkan Longitude" oninput="validateCoordinates()">
+            <button onclick="addPointFromInput()">Tambahkan Titik</button>
+            <div id="coordinate-warning" class="warning hidden">Masukkan koordinat yang valid (Latitude: -90 hingga 90, Longitude: -180 hingga 180).</div>
+        </div>
+        <div class="input-group">
+            <label for="search">Cari lokasi:</label>
+            <input type="text" id="search" placeholder="Masukkan nama lokasi">
+            <button onclick="searchLocation()">Cari</button>
+        </div>
+        <button class="reset-btn" onclick="resetMap()">Reset Map</button>
+        <div class="info" id="info">
+            Klik pada peta untuk menambahkan titik. Jarak antar titik akan dihitung.
+        </div>
+    </div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet.geodesic"></script>
+
+    <script>
+        const basemaps = {
+            'OpenStreetMap': L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                maxZoom: 18,
+                attribution: '© OpenStreetMap contributors'
+            }),
+            'EsriWorldImagery': L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+                maxZoom: 18,
+                attribution: 'Tiles © Esri — Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community'
+            }),
+            'CartoDBDarkMatter': L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+                maxZoom: 18,
+                attribution: '© OpenStreetMap contributors © CartoDB'
+            })
+        };
+
+        const map = L.map('map', {
+            center: [-6.200000, 106.816666],
+            zoom: 5,
+            layers: [basemaps['OpenStreetMap']]
+        });
+
+        let points = [];
+        let geodesicPolyline = null;
+
+        map.on('click', function (e) {
+            const latlng = e.latlng;
+            addPoint(latlng);
+        });
+
+        function addPoint(latlng) {
+            points.push(latlng);
+            const marker = L.marker(latlng).addTo(map);
+            getLocationName(latlng.lat, latlng.lng, (locationName) => {
+                marker.bindPopup(`Titik: ${points.length}<br>Lokasi: ${locationName}`).openPopup();
+            });
+            drawGeodesicPolyline();
+
+            if (points.length > 1) {
+                const distance = calculateTotalDistance(points);
+                document.getElementById('info').innerText = `Jarak antar titik: ${distance.toFixed(2)} km`;
+            }
+        }
+
+        function drawGeodesicPolyline() {
+            if (geodesicPolyline) {
+                geodesicPolyline.remove();
+            }
+            if (points.length > 1) {
+                geodesicPolyline = L.geodesic(points, { weight: 4, color: 'red', opacity: 0.5 }).addTo(map);
+            }
+        }
+
+        function calculateTotalDistance(points) {
+            let totalDistance = 0;
+            for (let i = 0; i < points.length - 1; i++) {
+                totalDistance += points[i].distanceTo(points[i + 1]) / 1000; // Convert meters to km
+            }
+            return totalDistance;
+        }
+
+        function getLocationName(lat, lng, callback) {
+            const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`;
+            fetch(url)
+                .then(response => response.json())
+                .then(data => {
+                    if (data && data.address) {
+                        callback(data.display_name || "Lokasi tidak ditemukan");
+                    } else {
+                        callback("Lokasi tidak ditemukan");
+                    }
+                })
+                .catch(() => {
+                    callback("Error mendapatkan nama lokasi");
+                });
+        }
+
+        function changeBasemap() {
+            const selectedBasemap = document.getElementById('basemap').value;
+            map.removeLayer(basemaps['OpenStreetMap']);
+            map.removeLayer(basemaps['EsriWorldImagery']);
+            map.removeLayer(basemaps['CartoDBDarkMatter']);
+            basemaps[selectedBasemap].addTo(map);
+        }
+
+        function validateCoordinates() {
+            const lat = parseFloat(document.getElementById('lat').value);
+            const lng = parseFloat(document.getElementById('lng').value);
+            const warning = document.getElementById('coordinate-warning');
+            if ((lat < -90 || lat > 90) || (lng < -180 || lng > 180)) {
+                warning.classList.remove('hidden');
+            } else {
+                warning.classList.add('hidden');
+            }
+        }
+
+        function addPointFromInput() {
+            const lat = parseFloat(document.getElementById('lat').value);
+            const lng = parseFloat(document.getElementById('lng').value);
+            if (lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+                const latlng = L.latLng(lat, lng);
+                addPoint(latlng);
+            } else {
+                alert('Koordinat tidak valid');
+            }
+        }
+
+        function searchLocation() {
+            const query = document.getElementById('search').value;
+            if (query) {
+                fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${query}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.length > 0) {
+                            const latlng = L.latLng(data[0].lat, data[0].lon);
+                            map.setView(latlng, 13);
+                            addPoint(latlng);
+                        } else {
+                            alert('Lokasi tidak ditemukan');
+                        }
+                    });
+            }
+        }
+
+        function resetMap() {
+            // Reset view peta ke posisi awal
+            map.setView([-6.200000, 106.816666], 5);
+
+            // Hapus semua titik (marker) dan polyline geodesik
+            points = []; // Kosongkan array titik
+            if (geodesicPolyline) {
+                geodesicPolyline.remove();
+                geodesicPolyline = null;
+            }
+
+            // Hapus semua marker dari peta
+            map.eachLayer((layer) => {
+                if (layer instanceof L.Marker) {
+                    map.removeLayer(layer);
+                }
+            });
+
+            // Reset informasi pada UI
+            document.getElementById('info').innerText = 'Klik pada peta untuk menambahkan titik. Jarak antar titik akan dihitung.';
+            document.getElementById('lat').value = '';
+            document.getElementById('lng').value = '';
+            document.getElementById('coordinate-warning').classList.add('hidden');
+        }
+
+        function togglePanel() {
+            const panel = document.querySelector('.control-panel');
+            panel.classList.toggle('hidden');
+        }
+    </script>
+</body>
+</html>
